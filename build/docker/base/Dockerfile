@@ -1,36 +1,52 @@
-ARG debian_buster_image_tag=8-jre-slim
-FROM openjdk:${debian_buster_image_tag}
-LABEL manteiner="Andre Perez <andre.marcos.perez@gmail.com>"
+# Use the base image
+FROM base
 
-# -- Layer: Image Metadata
+# Maintainer information
+LABEL maintainer="Andre Perez <andre.marcos.perez@gmail.com>"
 
+# Image Metadata
 ARG build_date
-
 LABEL org.label-schema.build-date=${build_date}
-LABEL org.label-schema.name="Apache Spark Standalone Cluster on Docker - Cluster Base Image"
-LABEL org.label-schema.description="Cluster base image shipped with Python, Scala and a shared workspace folder"
+LABEL org.label-schema.name="Apache Spark Standalone Cluster on Docker - JupyterLab Image"
+LABEL org.label-schema.description="JupyterLab image"
 LABEL org.label-schema.url="https://github.com/andre-marcos-perez/spark-cluster-on-docker"
 LABEL org.label-schema.schema-version="1.0"
 
-# -- Layer: OS + Python + Scala
+# Notebooks and Data Layer
+ADD workspace/ ${SHARED_WORKSPACE}/
 
+# JupyterLab + Python kernel for PySpark
+ARG spark_version
+ARG jupyterlab_version
+ARG scala_kernel_version
+RUN apt-get update -y && \
+    apt-get install -y python3-pip python3-dev && \
+    pip3 install --upgrade pip && \
+    pip3 install wget==3.2 pyspark==${spark_version} jupyterlab==${jupyterlab_version}
+
+# Scala kernel for Spark
 ARG scala_version
-ARG shared_workspace=/opt/workspace
+RUN apt-get install -y ca-certificates-java --no-install-recommends && \
+    curl -Lo coursier https://git.io/coursier-cli && \
+    chmod +x coursier && \
+    ./coursier launch --fork almond:${scala_kernel_version} --scala ${scala_version} -- --display-name "Scala ${scala_version}" --install && \
+    rm -f coursier
 
-RUN mkdir -p ${shared_workspace}/data && \
-    mkdir -p /usr/share/man/man1 && \
-    apt-get update -y && \
-    apt-get install -y curl python3 r-base && \
-    ln -s /usr/bin/python3 /usr/bin/python && \
-    curl https://downloads.lightbend.com/scala/${scala_version}/scala-${scala_version}.deb -k -o scala.deb && \
-    apt install -y ./scala.deb && \
-    rm -rf scala.deb /var/lib/apt/lists/*
+# R kernel for SparkR
+RUN apt-get install -y r-base-dev && \
+    R -e "install.packages('IRkernel')" && \
+    R -e "IRkernel::installspec(displayname = 'R 3.5', user = FALSE)" && \
+    curl https://archive.apache.org/dist/spark/spark-${spark_version}/SparkR_${spark_version}.tar.gz -k -o sparkr.tar.gz && \
+    R CMD INSTALL sparkr.tar.gz && \
+    rm -f sparkr.tar.gz
 
-ENV SCALA_HOME="/usr/bin/scala"
-ENV PATH=${PATH}:${SCALA_HOME}/bin
-ENV SHARED_WORKSPACE=${shared_workspace}
+# Jupyter Notebook security configurations
+RUN mkdir -p ~/.jupyter && \
+    echo "c.NotebookApp.password = u'sha1:231c840cb3bc:671ee604d5739be508615daea5241a68ee74aed3'" >> ~/.jupyter/jupyter_notebook_config.py && \
+    echo "c.NotebookApp.token = ''" >> ~/.jupyter/jupyter_notebook_config.py && \
+    echo "c.NotebookApp.open_browser = False" >> ~/.jupyter/jupyter_notebook_config.py
 
-# -- Runtime
-
-VOLUME ${shared_workspace}
-CMD ["bash"]
+# Runtime Configuration
+EXPOSE 8888
+WORKDIR ${SHARED_WORKSPACE}
+CMD jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token=
